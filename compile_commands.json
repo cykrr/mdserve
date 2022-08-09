@@ -1,0 +1,15 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-DLINUX",
+      "-D_REENTRANT",
+      "-D_GNU_SOURCE",
+      "-I/usr/include/apr-1",
+      "main.c"
+    ],
+    "directory": "/home/krr/mdserve",
+    "file": "/home/krr/mdserve/main.c"
+  }
+]
