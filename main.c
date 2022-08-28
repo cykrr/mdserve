@@ -1,6 +1,3 @@
-#include <md4c.h>
-
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -11,6 +8,7 @@
 #define CONNMAX 50
 #define BUFSZ 65535
 #define BUFFER_SIZE 50
+#define MAX_URI_SIZE 50
 
 #include <string.h>
 #include <stdlib.h>
@@ -18,6 +16,7 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include "md.h"
 
 int clientfd;
 FILE *clientfp;
@@ -25,6 +24,10 @@ int clients[CONNMAX];
 int client_count = 0;
 
 static int listenfd;
+
+char *rawFile() {
+
+}
 
 static char *buf;
 
@@ -65,65 +68,40 @@ char *request_header(const char *name)
 }
 
 void route() {
-    ROUTE_START()
-    
-    ROUTE_GET("/")
-    {
-        fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
-        printf("Opening file\n");
-        FILE *stream = 
-            fopen("dist/index.html", "r");
+  fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+  char filename[51] = ".";
+  strcat(filename, uri);
+  FILE *head = fopen("head.html", "r");
+  if (!head) {
+    printf("Head not found\n");
+    exit(1);
+  }
 
-        if (!stream)
-        {
-            printf("Error loading index.html");
-        }
-        char c;
-        do
-        {
-            c = fgetc(stream);
-            if (feof(stream))
-                break;
-            fputc(c, clientfp);
-            printf("%c", c);
-        } while (1);
-        printf("Closing\n");
-        fclose(stream);
-    }
+  FILE * tail = fopen("tail.html", "r");
+  if (!tail) {
+    printf("Tail not found\n");
+    exit(1);
+  }
 
-    ROUTE_GET("/asd") {
-        printf("asd\n");
-        fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
-        fprintf(clientfp, "XD\r\n");
-    }
+  char line[1025];
 
-    ROUTE_POST("/")
-    {
-            printf("HTTP/1.1 200 OK \r\n\r\n");
-            printf("Wow, seems that you POSTed %d bytes. \r\n", payload_size);
-            if (payload_size > 0)
-                  printf("Request body: %s", payload);
-    }
+  while (fgets(line, 1024, head))
+    fprintf(clientfp, "%s", line);
+  fclose (head);
 
-    ROUTE_HEAD("/")
-    {
-            fprintf(clientfp, "HTTP/1.1 200 OK \r\n");
-            FILE *stream = fopen("dist/index.html", "r");
-            if (!stream) {
-                fprintf(clientfp, "Content-Type: 0\r\n");
-            } else {
-                fseek(stream, 0L, SEEK_END);
-                size_t size = ftell(stream);
-                fprintf(clientfp, "ETag: \"%zd\"\r\n", size);
-                printf("asd %zd\n", size);
+  if (strstr(uri, ".md"))
+    fprintf(
+        clientfp,
+        "%s",
+        mdToHtml(filename));
 
-            }
+  else if (strstr(uri, ".css"))
+    fprintf(clientfp, "%s", rawFile(filename));
 
-    }
-
-    ROUTE_END()
-    printf("Client count: %d/%d\n", client_count, CONNMAX);
-}
+  while (fgets(line, 1024, tail))
+    fprintf(clientfp, "%s", line);
+  fclose (tail);
+};
 
 void startServer(const char * port)
 {
@@ -282,5 +260,69 @@ void serve(const char *port)
 
 int main()
 {
-    serve("8080");
+  printf("hi\n");
+  serve("8080");
 }
+
+/*
+void route() {
+    ROUTE_START()
+    
+    ROUTE_GET("/")
+    {
+        fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+        printf("Opening file\n");
+        FILE *stream = 
+            fopen("dist/index.html", "r");
+
+        if (!stream)
+        {
+            printf("Error loading index.html");
+        }
+        char c;
+        do
+        {
+            c = fgetc(stream);
+            if (feof(stream))
+                break;
+            fputc(c, clientfp);
+            printf("%c", c);
+        } while (1);
+        printf("Closing\n");
+        fclose(stream);
+    }
+
+    ROUTE_GET("/asd") {
+        printf("asd\n");
+        fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+        fprintf(clientfp, "XD\r\n");
+    }
+
+    ROUTE_POST("/")
+    {
+            printf("HTTP/1.1 200 OK \r\n\r\n");
+            printf("Wow, seems that you POSTed %d bytes. \r\n", payload_size);
+            if (payload_size > 0)
+                  printf("Request body: %s", payload);
+    }
+
+    ROUTE_HEAD("/")
+    {
+            fprintf(clientfp, "HTTP/1.1 200 OK \r\n");
+            FILE *stream = fopen("dist/index.html", "r");
+            if (!stream) {
+                fprintf(clientfp, "Content-Type: 0\r\n");
+            } else {
+                fseek(stream, 0L, SEEK_END);
+                size_t size = ftell(stream);
+                fprintf(clientfp, "ETag: \"%zd\"\r\n", size);
+                printf("asd %zd\n", size);
+
+            }
+
+    }
+
+    ROUTE_END()
+    printf("Client count: %d/%d\n", client_count, CONNMAX);
+}
+*/
