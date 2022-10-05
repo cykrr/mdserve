@@ -5,10 +5,13 @@
 
 #include <arpa/inet.h>
 
+#include <dirent.h>
+
 #define CONNMAX 50
 #define BUFSZ 65535
 #define BUFFER_SIZE 50
 #define MAX_URI_SIZE 50
+#define LINE_MAX 1024
 
 #include <string.h>
 #include <stdlib.h>
@@ -25,8 +28,13 @@ int client_count = 0;
 
 static int listenfd;
 
-char *rawFile() {
+char *rawFile(char *filename) {
+  FILE* file = fopen(filename, "w");
+  if (!file) {
+    return "File not found";
+  }
 
+  return "";
 }
 
 static char *buf;
@@ -67,40 +75,86 @@ char *request_header(const char *name)
     return NULL;
 }
 
+FILE * open_wrapper(char *filename) {
+    FILE *f = fopen(filename, "r");
+    if (!f) {
+      printf("\"%s\" not found\n", filename);
+      return NULL;
+    }
+
+    return f;
+}
+
+void cat_file(FILE* out, char *filename) {
+  if (!out) {
+    printf("Excepción: cat_file(): El archivo no existe o puntero NULL");
+    return;
+  }
+
+  char line[LINE_MAX];
+
+  FILE *in = fopen(filename, "r");
+  
+  while (fgets(line, LINE_MAX - 1, in))
+    fprintf(out, "%s", line);
+  fclose(in);
+}
+
 void route() {
-  fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+
+  if(strcmp(uri, "/") == 0) {
+    fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+    fprintf(clientfp, "<h1>asd</h1> \r\n\r\n");
+    return;
+    
+  }
+  // printf("Uri: %s\n", uri);
+
   char filename[51] = ".";
   strcat(filename, uri);
-  FILE *head = fopen("head.html", "r");
-  if (!head) {
-    printf("Head not found\n");
-    exit(1);
+
+  DIR *dir = opendir(filename);
+  struct dirent *dent;
+
+  if (dir) {
+    fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+    while ((dent = readdir(dir)) != NULL)  {
+      if (strcmp(dent->d_name, ".") == 0 || 
+          strcmp(dent->d_name, "..") == 0 ||
+          (*dent->d_name == '.')) {
+      } else {
+        fprintf(clientfp, "<a href = \"%s/%s\">%s</a>\r\n",uri, dent->d_name, dent->d_name);
+      }
+    }
+
+    closedir(dir);
+    return;
   }
 
-  FILE * tail = fopen("tail.html", "r");
-  if (!tail) {
-    printf("Tail not found\n");
-    exit(1);
+  FILE *file = fopen(filename, "r");
+  FILE *head = NULL;
+  if (file)
+    fprintf(clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+  else {
+    fprintf(clientfp, "HTTP/1.1 404 NOT FOUND \r\n\r\n");
+    cat_file(clientfp, "404.html");
+
   }
 
-  char line[1025];
+  if (strstr(uri, ".md")){
+    cat_file(clientfp, "head.html");
 
-  while (fgets(line, 1024, head))
-    fprintf(clientfp, "%s", line);
-  fclose (head);
-
-  if (strstr(uri, ".md"))
     fprintf(
         clientfp,
         "%s",
-        mdToHtml(filename));
+        mdToHtml(file)
+        );
 
-  else if (strstr(uri, ".css"))
-    fprintf(clientfp, "%s", rawFile(filename));
+    cat_file(clientfp, "tail.html");
 
-  while (fgets(line, 1024, tail))
-    fprintf(clientfp, "%s", line);
-  fclose (tail);
+  } else if (strstr(uri, ".css"))
+      cat_file(clientfp, filename);
+
 };
 
 void startServer(const char * port)
