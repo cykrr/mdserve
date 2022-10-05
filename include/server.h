@@ -24,13 +24,13 @@ typedef struct Server {
     * prot;      // "HTTP/1.1"
     
     const char *port;
-    void (*route)(char *uri, FILE *out);
+    void (*route)(const char *uri, FILE *out);
     
     header_t reqhdr[17];
 } Server;
 
 
-void serverInit(Server *s, const char *port, void (*route)(char *uri, FILE *out));
+void serverInit(Server *s, const char *port, void (*route)(const char *uri, FILE *out));
 void serve(Server *server);
 void startServer(Server *server);
 void respond(Server *server, int n);

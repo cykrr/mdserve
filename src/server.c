@@ -1,17 +1,18 @@
 #include <dirent.h>
+#include <fcntl.h>
+#include <netdb.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <netdb.h>
-#include <fcntl.h>
+#include <unistd.h>
 
 #include "membuf.h"
 #include "server.h"
 #include "md.h"
 
-void serverInit(Server *s, const char *port, void (*route)(char *uri, FILE *out))
+void serverInit(Server *s, const char *port, void (*route)(const char *uri, FILE *out))
 {
     s->port = port;
     s->route = route;

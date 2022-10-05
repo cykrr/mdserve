@@ -16,14 +16,6 @@
 #include "md.h"
 #include "server.h"
 
-char *rawFile(char *filename) {
-  FILE* file = fopen(filename, "w");
-  if (!file) {
-    return "File not found";
-  }
-
-  return "";
-}
 
 static void route(const char *uri, FILE *out) {
     if(strcmp(uri, "/") == 0) {
@@ -55,6 +47,15 @@ FILE * open_wrapper(char *filename) {
     return f;
 }
 
+
+char *rawFile(char *filename) {
+  FILE* file = fopen(filename, "w");
+  if (!file) {
+    return "File not found";
+  }
+
+  return "";
+}
 
 
 // static char *buf;
