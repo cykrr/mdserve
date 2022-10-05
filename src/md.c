@@ -28,6 +28,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "membuf.h"
+
 #include "md4c-html.h"
 #include "md4c.h"
 
@@ -45,60 +47,6 @@ static int want_xhtml = 0;
 static int want_stat = 0;
 
 
-/*********************************
- ***  Simple grow-able buffer  ***
- *********************************/
-
-/* We render to a memory buffer instead of directly outputting the rendered
- * documents, as this allows using this utility for evaluating performance
- * of MD4C (--stat option). This allows us to measure just time of the parser,
- * without the I/O.
- */
-
-struct membuffer {
-  char* data;
-  size_t asize;
-  size_t size;
-};
-
-  static void
-membuf_init(struct membuffer* buf, MD_SIZE new_asize)
-{
-  buf->size = 0;
-  buf->asize = new_asize;
-  buf->data = malloc(buf->asize);
-  if(buf->data == NULL) {
-    fprintf(stderr, "membuf_init: malloc() failed.\n");
-    exit(1);
-  }
-}
-
-  static void
-membuf_fini(struct membuffer* buf)
-{
-  if(buf->data)
-    free(buf->data);
-}
-
-  static void
-membuf_grow(struct membuffer* buf, size_t new_asize)
-{
-  buf->data = realloc(buf->data, new_asize);
-  if(buf->data == NULL) {
-    fprintf(stderr, "membuf_grow: realloc() failed.\n");
-    exit(1);
-  }
-  buf->asize = new_asize;
-}
-
-  static void
-membuf_append(struct membuffer* buf, const char* data, MD_SIZE size)
-{
-  if(buf->asize < buf->size + size)
-    membuf_grow(buf, buf->size + buf->size / 2 + size);
-  memcpy(buf->data + buf->size, data, size);
-  buf->size += size;
-}
 
 
 /**********************
@@ -197,64 +145,6 @@ out:
 
 
 
-  static void
-usage(void)
-{
-  printf(
-      "Usage: md2html [OPTION]... [FILE]\n"
-      "Convert input FILE (or standard input) in Markdown format to HTML.\n"
-      "\n"
-      "General options:\n"
-      "  -o  --output=FILE    Output file (default is standard output)\n"
-      "  -f, --full-html      Generate full HTML document, including header\n"
-      "  -x, --xhtml          Generate XHTML instead of HTML\n"
-      "  -s, --stat           Measure time of input parsing\n"
-      "  -h, --help           Display this help and exit\n"
-      "  -v, --version        Display version and exit\n"
-      "\n"
-      "Markdown dialect options:\n"
-      "(note these are equivalent to some combinations of the flags below)\n"
-      "      --commonmark     CommonMark (this is default)\n"
-      "      --github         Github Flavored Markdown\n"
-      "\n"
-      "Markdown extension options:\n"
-      "      --fcollapse-whitespace\n"
-      "                       Collapse non-trivial whitespace\n"
-      "      --flatex-math    Enable LaTeX style mathematics spans\n"
-      "      --fpermissive-atx-headers\n"
-      "                       Allow ATX headers without delimiting space\n"
-      "      --fpermissive-url-autolinks\n"
-      "                       Allow URL autolinks without '<', '>'\n"
-      "      --fpermissive-www-autolinks\n"
-      "                       Allow WWW autolinks without any scheme (e.g. 'www.example.com')\n"
-      "      --fpermissive-email-autolinks  \n"
-      "                       Allow e-mail autolinks without '<', '>' and 'mailto:'\n"
-      "      --fpermissive-autolinks\n"
-      "                       Same as --fpermissive-url-autolinks --fpermissive-www-autolinks\n"
-      "                       --fpermissive-email-autolinks\n"
-      "      --fstrikethrough Enable strike-through spans\n"
-      "      --ftables        Enable tables\n"
-      "      --ftasklists     Enable task lists\n"
-      "      --funderline     Enable underline spans\n"
-      "      --fwiki-links    Enable wiki links\n"
-      "\n"
-      "Markdown suppression options:\n"
-      "      --fno-html-blocks\n"
-      "                       Disable raw HTML blocks\n"
-      "      --fno-html-spans\n"
-      "                       Disable raw HTML spans\n"
-      "      --fno-html       Same as --fno-html-blocks --fno-html-spans\n"
-      "      --fno-indented-code\n"
-      "                       Disable indented code blocks\n"
-      "\n"
-      "HTML generator options:\n"
-      "      --fverbatim-entities\n"
-      "                       Do not translate entities\n"
-      "\n"
-      );
-}
-
-
 static const char* input_path = NULL;
 static const char* output_path = NULL;
 
@@ -263,17 +153,14 @@ static const char* output_path = NULL;
  * el código convertido a html
  */
 
-char *mdToHtml(char *filename)
+char *mdToHtml(FILE *file)
 {
-  FILE* in = fopen(filename, "r");
-
   struct membuffer ret = {0};
 
-  if (!in) {
-    printf("mdToHtml() No existe el archivo \"%s\"\n", filename);
-    return NULL;
+  if (!file) {
+    return "mdToHtml() No existe el archivo\n";
   }
 
-  ret = process_file(in);
+  ret = process_file(file);
   return ret.data;
 }
