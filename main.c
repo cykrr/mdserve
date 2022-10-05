@@ -25,21 +25,23 @@ char *rawFile(char *filename) {
   return "";
 }
 
-static char *buf;
+static void route(const char *uri, FILE *out) {
+    if(strcmp(uri, "/") == 0) {
+        fprintf(out, "HTTP/1.1 200 OK \r\n\r\n");
+        fprintf(out, "<h1>asd</h1> \r\n\r\n");
+        return;
+    }
+}
 
 
-
-
-#define ROUTE_START()       if (0) {
-#define ROUTE(METHOD,URI)   } else if (strcmp(URI,uri)==0&&strcmp(METHOD,method)==0) {
-#define ROUTE_GET(URI)      ROUTE("GET", URI) 
-#define ROUTE_POST(URI)     ROUTE("POST", URI) 
-#define ROUTE_HEAD(URI)     ROUTE("HEAD", URI)
-
-#define ROUTE_END()         } else printf(\
-                                "HTTP/1.1 500 Not Handled\r\n\r\n" \
-                                "The server has no handler to the request: %s .\r\n", uri \
-                            );
+int main()
+{
+    Server s;
+        serverInit(&s, "8080", &route);
+        printf("Init successful\n");
+        serve(&s);
+    return 0;
+}
 
 
 
@@ -55,14 +57,18 @@ FILE * open_wrapper(char *filename) {
 
 
 
-
-
-
-
-
-int main()
-{
-    Server s;
-    serve(&s,"8080");
-    return 0;
-}
+// static char *buf;
+//
+//
+//
+//
+// #define ROUTE_START()       if (0) {
+// #define ROUTE(METHOD,URI)   } else if (strcmp(URI,uri)==0&&strcmp(METHOD,method)==0) {
+// #define ROUTE_GET(URI)      ROUTE("GET", URI) 
+// #define ROUTE_POST(URI)     ROUTE("POST", URI) 
+// #define ROUTE_HEAD(URI)     ROUTE("HEAD", URI)
+//
+// #define ROUTE_END()         } else printf(\
+//                                 "HTTP/1.1 500 Not Handled\r\n\r\n" \
+//                                 "The server has no handler to the request: %s .\r\n", uri \
+//                             );
