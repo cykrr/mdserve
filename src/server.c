@@ -11,29 +11,36 @@
 #include "server.h"
 #include "md.h"
 
-void route();
+void serverInit(Server *s, const char *port, void (*route)(char *uri, FILE *out))
+{
+    s->port = port;
+    s->route = route;
 
-void serverInit(Server *s) {
-    s->reqhdr->name = "\0";
-    s->reqhdr->value = "\0";
+    /* Inicializar headers en NULL */
+    for (int i = 0; i < 17; i++)  {
+        s->reqhdr[i].name = NULL;
+        s->reqhdr[i].value = NULL;
+    }
 }
 
 
 /* Get request header */
 char *request_header(Server *s, const char *name)
 {
+    int flag = 0;
     header_t *h = s->reqhdr;
     while (h->name)
     {
-        if (strcmp(h->name, name) == 0)
+        if (strcmp(h->name, name) == 0){
             return h->value;
+        }
         h++;
     }
     return NULL;
 }
 
 
-void serve(Server *s, const char *port)
+void serve(Server *s)
 {
     struct sockaddr_in  client_addr;
     socklen_t addr_len;
@@ -41,7 +48,7 @@ void serve(Server *s, const char *port)
     int slot = 0;
     for (int i = 0; i < CONNMAX; i++)
         s->clients[i] = -1;
-    startServer(s, port);
+    startServer(s);
     /* Ignore SIGCHLD to avoid zombies */
     signal(SIGCHLD, SIG_IGN);
 
@@ -59,7 +66,6 @@ void serve(Server *s, const char *port)
             if (fork() == 0)
             {
                 printf("respond()\n");
-
                 respond(s, slot);
                 exit(0);
             } else {
@@ -70,13 +76,13 @@ void serve(Server *s, const char *port)
 
 }
 
-void startServer(Server *server, const char * port)
+void startServer(Server *server)
 {
     struct addrinfo hints = {0}, *res, *p;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
-    if (getaddrinfo(NULL, port, &hints, &res) != 0)
+    if (getaddrinfo(NULL, server->port, &hints, &res) != 0)
     {
         printf("getaddrinfo() error\n");
         exit(1);
@@ -128,7 +134,6 @@ void respond(Server *server, int n)
         printf("Client disconnected unexpectedly\n");
     } else // Mesage recvd
     {
-        printf("!%s\n", buf.data);
         buf.data[rcvd] = '\0';
 
         server->method = strtok(buf.data, " \t\r\n");
@@ -136,7 +141,6 @@ void respond(Server *server, int n)
         server->prot = strtok(NULL,  " \t\r\n");
 
         printf("\x1b[33m  + [%s] %s\x1b[0m\n", server->method, server->uri);
-
 
         if ((server->qs = strchr(server->uri, '?')))
         {
@@ -147,10 +151,11 @@ void respond(Server *server, int n)
         header_t *h = server->reqhdr;
         char *t, *tt;
 
+
+        
         while (h < server->reqhdr + 16)
         {
             char *k, *v, *t;
-
             k = strtok(NULL, "\r\n: \t");
             if (!k) break;
 
@@ -160,7 +165,7 @@ void respond(Server *server, int n)
             h->name = k;
             h->value = v;
             h++;
-            printf("[H] %s: %s\n", k, v);
+            // printf("[H] %s: %s\n", k, v);
             t = v + 1 + strlen(v);
             if (t[1] == '\r' && t[2] == '\n') break;
         }
@@ -181,7 +186,7 @@ void respond(Server *server, int n)
 
         server->clientfp = fdopen(server->clientfd, "w");
         /* Call router */
-        route();
+        server->route(server->uri, server->clientfp);
         /* Tidy up */
         fflush(server->clientfp);
         shutdown(server->clientfd, SHUT_WR);
@@ -205,59 +210,59 @@ void cat_file(FILE* out, char *filename) {
   fclose(in);
 }
 
-void route(Server *server) {
-    printf("routing\n");
-  if(strcmp(server->uri, "/") == 0) {
-    fprintf(server->clientfp, "HTTP/1.1 200 OK \r\n\r\n");
-    fprintf(server->clientfp, "<h1>asd</h1> \r\n\r\n");
-    return;
-    
-  }
-  printf("Uri: %s\n", server->uri);
-
-  char filename[51] = ".";
-  strcat(filename, server->uri);
-
-  DIR *dir = opendir(filename);
-  struct dirent *dent;
-
-  if (dir) {
-    fprintf(server->clientfp, "HTTP/1.1 200 OK \r\n\r\n");
-    while ((dent = readdir(dir)) != NULL)  {
-      if (strcmp(dent->d_name, ".") == 0 || 
-          strcmp(dent->d_name, "..") == 0 ||
-          (*dent->d_name == '.')) {
-      } else {
-        fprintf(server->clientfp, "<a href = \"%s/%s\">%s</a>\r\n",server->uri, dent->d_name, dent->d_name);
-      }
-    }
-
-    closedir(dir);
-    return;
-  }
-
-  FILE *file = fopen(filename, "r");
-  FILE *head = NULL;
-  if (file)
-    fprintf(server->clientfp, "HTTP/1.1 200 OK \r\n\r\n");
-  else {
-    fprintf(server->clientfp, "HTTP/1.1 404 NOT FOUND \r\n\r\n");
-    cat_file(server->clientfp, "404.html");
-
-  }
-
-  if (strstr(server->uri, ".md")){
-    cat_file(server->clientfp, "head.html");
-
-    fprintf(
-        server->clientfp,
-        "%s",
-        mdToHtml(file)
-        );
-
-    cat_file(server->clientfp, "tail.html");
-
-  } else if (strstr(server->uri, ".css"))
-      cat_file(server->clientfp, filename);
-
-};
+// void route(Server *server) {
+//     printf("routing\n");
+  // if(strcmp(server->uri, "/") == 0) {
+  //   fprintf(server->clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+  //   fprintf(server->clientfp, "<h1>asd</h1> \r\n\r\n");
+  //   return;
+//     
+//   }
+//   printf("Uri: %s\n", server->uri);
+//
+//   char filename[51] = ".";
+//   strcat(filename, server->uri);
+//
+//   DIR *dir = opendir(filename);
+//   struct dirent *dent;
+//
+//   if (dir) {
+//     fprintf(server->clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+//     while ((dent = readdir(dir)) != NULL)  {
+//       if (strcmp(dent->d_name, ".") == 0 || 
+//           strcmp(dent->d_name, "..") == 0 ||
+//           (*dent->d_name == '.')) {
+//       } else {
+//         fprintf(server->clientfp, "<a href = \"%s/%s\">%s</a>\r\n",server->uri, dent->d_name, dent->d_name);
+//       }
+//     }
+//
+//     closedir(dir);
+//     return;
+//   }
+//
+//   FILE *file = fopen(filename, "r");
+//   FILE *head = NULL;
+//   if (file)
+//     fprintf(server->clientfp, "HTTP/1.1 200 OK \r\n\r\n");
+//   else {
+//     fprintf(server->clientfp, "HTTP/1.1 404 NOT FOUND \r\n\r\n");
+//     cat_file(server->clientfp, "404.html");
+//
+//   }
+//
+//   if (strstr(server->uri, ".md")){
+//     cat_file(server->clientfp, "head.html");
+//
+//     fprintf(
+//         server->clientfp,
+//         "%s",
+//         md_to_html(file)
+//         );
+//
+//     cat_file(server->clientfp, "tail.html");
+//
+//   } else if (strstr(server->uri, ".css"))
+//       cat_file(server->clientfp, filename);
+//
+// };
