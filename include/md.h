@@ -1,4 +1,5 @@
 #include "md4c-html.h"
 #include "md4c.h"
+#include <stdio.h>
 
-char *mdToHtml(FILE *file);
+char *md_to_html(FILE *file);
