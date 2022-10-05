@@ -5,3 +5,4 @@ a.out
 compile_commands.json
 mdserve
 membuf.o
+server.o
