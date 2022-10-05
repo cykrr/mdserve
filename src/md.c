@@ -44,11 +44,7 @@ static unsigned renderer_flags = MD_HTML_FLAG_DEBUG | MD_HTML_FLAG_SKIP_UTF8_BOM
 static unsigned renderer_flags = MD_HTML_FLAG_DEBUG;
 #endif
 
-/**********************
- ***  Main program  ***
- **********************/
-
-  static void
+static void
 process_output(const MD_CHAR* text, MD_SIZE size, void* userdata)
 {
   membuf_append((struct membuffer*) userdata, text, size);
@@ -67,37 +63,30 @@ static struct membuffer process_file(FILE* in)
 
   /* Read the input file into a buffer. */
   while(1) {
-    if(buf_in.size >= buf_in.asize)
-      membuf_grow(&buf_in, buf_in.asize + buf_in.asize / 2);
+      if(buf_in.size >= buf_in.asize)
+          membuf_grow(&buf_in, buf_in.asize + buf_in.asize / 2);
 
-    n = fread(buf_in.data + buf_in.size, 1, buf_in.asize - buf_in.size, in);
-    if(n == 0)
-      break;
+      n = fread(buf_in.data + buf_in.size, 1, buf_in.asize - buf_in.size, in);
+      if(n == 0)
+          break;
 
-    buf_in.size += n;
+      buf_in.size += n;
   }
 
-  /* Input size is good estimation of output size. Add some more reserve to
-   * deal with the HTML header/footer and tags. */
+  /* El size de entrada es una buena aproximación del size de salida. Se
+   * reserva un poco más para almacenar el header y el footer. */
   membuf_init(&buf_out, (MD_SIZE)(buf_in.size + buf_in.size/8 + 64));
 
-  /* Parse the document. This shall call our callbacks provided via the
-   * md_renderer_t structure. */
+  /* Analizar el documento. Esto debería llamar a nuestro callback
+   * proporcionado por la estructura md_renderer_t.
+   */
 
-  ret = md_html(buf_in.data, (MD_SIZE)buf_in.size, process_output, (void*) &buf_out,
-      parser_flags, renderer_flags);
+  ret = md_html(buf_in.data, buf_in.size, process_output, (void*) &buf_out,
+          parser_flags, renderer_flags);
 
-  if(ret != 0) {
-    fprintf(stderr, "Parsing failed.\n");
-    goto out;
-  }
-
-  /* Success if we have reached here. */
-  ret = 0;
-
-out:
+  if(ret != 0)
+      fprintf(stderr, "Parsing failed.\n");
   membuf_fini(&buf_in);
-
   return buf_out;
 }
 
@@ -111,12 +100,12 @@ static const char* output_path = NULL;
  * el código convertido a html
  */
 
-char *mdToHtml(FILE *file)
+char *md_to_html(FILE *file)
 {
   struct membuffer ret = {0};
 
   if (!file) {
-    return "mdToHtml() No existe el archivo\n";
+    return "md_to_html() No existe el archivo\n";
   }
 
   ret = process_file(file);
