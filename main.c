@@ -17,14 +17,90 @@
 #include "server.h"
 
 
-static void route(const char *uri, FILE *out) {
-    if(strcmp(uri, "/") == 0) {
-        fprintf(out, "HTTP/1.1 200 OK \r\n\r\n");
-        fprintf(out, "<h1>asd</h1> \r\n\r\n");
-        return;
-    }
+void cat_file(FILE* out, char *filename) {
+  if (!out) {
+    printf("Excepción: cat_file(): El archivo no existe o puntero NULL");
+    return;
+  }
+
+  char line[2048] = {0};
+
+  FILE *in = fopen(filename, "r");
+  if (!in) {
+      return;
+  }
+
+  while (fgets(line, sizeof(line), in)) {
+    fprintf(out, "%s", line);
+  }
+  fclose(in);
 }
 
+static void route(const char *uri, FILE *out) {
+  printf("Uri: %s\n", uri);
+
+  if (strstr(uri, "..")) {
+      fprintf(out, "HTTP/1.1 403 FORBIDDEN \r\n\r\n");
+      fprintf(out, "<h1>Error 403: Forbidden</h1>\r\n");
+      return;
+  }
+
+  char filename[256] = ".";
+  strncat(filename, uri, 254);
+
+  DIR *dir = opendir(filename);
+  struct dirent *dent;
+
+  if (dir) {
+    fprintf(out, "HTTP/1.1 200 OK \r\n\r\n");
+    while ((dent = readdir(dir)) != NULL)  {
+      if (strcmp(dent->d_name, ".") == 0 ||
+          strcmp(dent->d_name, "..") == 0 ||
+          (*dent->d_name == '.')) {
+      } else {
+        if (strcmp(uri, "/") == 0) {
+            fprintf(out, "<a href = \"%s%s\">%s</a><br>\r\n", uri, dent->d_name, dent->d_name);
+        } else {
+            fprintf(out, "<a href = \"%s/%s\">%s</a><br>\r\n", uri, dent->d_name, dent->d_name);
+        }
+      }
+    }
+
+    closedir(dir);
+    return;
+  }
+
+  FILE *file = fopen(filename, "r");
+  if (file)
+    fprintf(out, "HTTP/1.1 200 OK \r\n\r\n");
+  else {
+    fprintf(out, "HTTP/1.1 404 NOT FOUND \r\n\r\n");
+    cat_file(out, "404.html");
+    return;
+  }
+
+  size_t uri_len = strlen(uri);
+  int is_md = (uri_len > 3 && strcmp(uri + uri_len - 3, ".md") == 0);
+
+  if (is_md){
+    cat_file(out, "head.html");
+
+    fprintf(
+        out,
+        "%s",
+        md_to_html(file)
+        );
+
+    cat_file(out, "tail.html");
+    fclose(file);
+  } else {
+      char line[2048] = {0};
+      while (fgets(line, sizeof(line), file)) {
+        fprintf(out, "%s", line);
+      }
+      fclose(file);
+  }
+}
 
 int main()
 {
