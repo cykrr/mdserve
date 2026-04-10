@@ -1,5 +1,5 @@
 mdserve: main.c md.o membuf.o server.o
-	gcc -DLINUX -D_REENTRANT -D_GNU_SOURCE -Iinclude -o mdserve main.c membuf.o md.o server.o -lmd4c-html -lmd4c
+	gcc -DLINUX -D_REENTRANT -D_GNU_SOURCE -Iinclude -o mdserve main.c membuf.o md.o server.o -lmd4c-html -lmd4c -lpthread
 
 md.o: src/md.c
 	gcc -c src/md.c -Iinclude

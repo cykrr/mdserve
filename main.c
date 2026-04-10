@@ -102,12 +102,45 @@ static void route(const char *uri, FILE *out) {
   }
 }
 
-int main()
+int main(int argc, char *argv[])
 {
+    const char *port = "8080";
+    const char *dir = ".";
+    int opt;
+
+    while ((opt = getopt(argc, argv, "p:d:")) != -1) {
+        switch (opt) {
+            case 'p':
+                port = optarg;
+                break;
+            case 'd':
+                dir = optarg;
+                break;
+            default:
+                fprintf(stderr, "Usage: %s [-p port] [-d directory]\n", argv[0]);
+                exit(EXIT_FAILURE);
+        }
+    }
+
+    if (chdir(dir) != 0) {
+        perror("chdir failed");
+        exit(EXIT_FAILURE);
+    }
+
     Server s;
-        serverInit(&s, "8080", &route);
-        printf("Init successful\n");
-        serve(&s);
+    for (int i = 0; i < CONNMAX; i++) {
+        s.clients[i] = -1;
+    }
+    serverInit(&s, port, &route);
+
+    printf("Init successful\n");
+    printf("=========================\n");
+    printf("Port: %s\n", port);
+    printf("Directory: %s\n", dir);
+    printf("=========================\n");
+    fflush(stdout);
+
+    serve(&s);
     return 0;
 }
 

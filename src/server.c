@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <pthread.h>
 #include "membuf.h"
 #include "server.h"
 #include "md.h"
@@ -16,20 +17,13 @@ void serverInit(Server *s, const char *port, void (*route)(const char *uri, FILE
 {
     s->port = port;
     s->route = route;
-
-    /* Inicializar headers en NULL */
-    for (int i = 0; i < 17; i++)  {
-        s->reqhdr[i].name = NULL;
-        s->reqhdr[i].value = NULL;
-    }
 }
 
 
 /* Get request header */
-char *request_header(Server *s, const char *name)
+char *request_header(header_t *reqhdr, const char *name)
 {
-    int flag = 0;
-    header_t *h = s->reqhdr;
+    header_t *h = reqhdr;
     while (h->name)
     {
         if (strcmp(h->name, name) == 0){
@@ -57,20 +51,38 @@ void serve(Server *s)
     while (1)
     {
         addr_len = sizeof(client_addr);
-        s->clients[slot] = accept (s->listenfd, (struct sockaddr *) &client_addr, &addr_len);
+        int client_fd = accept(s->listenfd, (struct sockaddr *) &client_addr, &addr_len);
 
-        if (s->clients[slot] < 0)
+        if (client_fd < 0)
         {
             printf("accept() error:\n");
         } else {
-            s->client_count++;
-            if (fork() == 0)
-            {
-                printf("respond()\n");
-                respond(s, slot);
-                exit(0);
-            } else {
+            int i;
+            for (i = 0; i < CONNMAX; i++) {
+                if (s->clients[i] == -1) {
+                    s->clients[i] = client_fd;
+                    break;
+                }
+            }
+            if (i == CONNMAX) {
+                printf("Max connections reached.\n");
+                close(client_fd);
+                continue;
+            }
 
+            s->client_count++;
+            thread_args_t *args = malloc(sizeof(thread_args_t));
+            args->server = s;
+            args->n = i;
+
+            pthread_t thread;
+            if (pthread_create(&thread, NULL, respond, args) != 0) {
+                printf("Failed to create thread\n");
+                close(client_fd);
+                s->clients[i] = -1;
+                free(args);
+            } else {
+                pthread_detach(thread);
             }
         }
     }
@@ -117,8 +129,13 @@ void startServer(Server *server)
 }
 
 /* Client connection */
-void respond(Server *server, int n)
+void *respond(void *args)
 {
+    thread_args_t *targs = (thread_args_t*)args;
+    Server *server = targs->server;
+    int n = targs->n;
+    free(targs);
+
     int rcvd, fd, bytes_read;
     char *ptr;
 
@@ -137,62 +154,76 @@ void respond(Server *server, int n)
     {
         buf.data[rcvd] = '\0';
 
-        server->method = strtok(buf.data, " \t\r\n");
-        server->uri = strtok(NULL,   " \t");
-        server->prot = strtok(NULL,  " \t\r\n");
+        char *saveptr;
+        char *method = strtok_r(buf.data, " \t\r\n", &saveptr);
+        char *uri = strtok_r(NULL,   " \t", &saveptr);
+        char *prot = strtok_r(NULL,  " \t\r\n", &saveptr);
 
-        printf("\x1b[33m  + [%s] %s\x1b[0m\n", server->method, server->uri);
-
-        if ((server->qs = strchr(server->uri, '?')))
-        {
-            *server->qs++ = '\0';
-        } else {
-            server->qs = server->uri -1;
+        if (!method || !uri || !prot) {
+            close(server->clients[n]);
+            server->clients[n] = -1;
+            membuf_fini(&buf);
+            return NULL;
         }
-        header_t *h = server->reqhdr;
+
+        printf("\x1b[33m  + [%s] %s\x1b[0m\n", method, uri);
+
+        char *qs = strchr(uri, '?');
+        if (qs)
+        {
+            *qs++ = '\0';
+        } else {
+            qs = uri - 1;
+        }
+
+        header_t reqhdr[17] = {0};
+        header_t *h = reqhdr;
         char *t, *tt;
 
 
         
-        while (h < server->reqhdr + 16)
+        while (h < reqhdr + 16)
         {
-            char *k, *v, *t;
-            k = strtok(NULL, "\r\n: \t");
+            char *k, *v, *t_inner;
+            k = strtok_r(NULL, "\r\n: \t", &saveptr);
             if (!k) break;
 
-            v = strtok(NULL, "\r\n");
+            v = strtok_r(NULL, "\r\n", &saveptr);
+            if (!v) break;
             while (*v && *v == ' ') v++;
 
             h->name = k;
             h->value = v;
             h++;
-            // printf("[H] %s: %s\n", k, v);
-            t = v + 1 + strlen(v);
-            if (t[1] == '\r' && t[2] == '\n') break;
+            t_inner = v + 1 + strlen(v);
+            if (t_inner[1] == '\r' && t_inner[2] == '\n') break;
         }
-        t++; /* Now the *t shall be at the beginning of the payload */
-        tt = request_header(server, "Content-Length");
+        /* NOTE: Original logic for extracting payload start is fragile, skipping for now as it's a GET server */
 
-        char    *payload;     // for POST
-        int      payload_size;
+        // tt = request_header(reqhdr, "Content-Length");
+        // char    *payload;     // for POST
+        // int      payload_size;
         
-        payload = t;
-        payload_size = tt ? atol(tt) : (rcvd - (t - buf.data));
+        // payload = t;
+        // payload_size = tt ? atol(tt) : (rcvd - (t - buf.data));
 
         /* Bind clientfd to stdout */
-        server->clientfd = server->clients[n];
+        int clientfd = server->clients[n];
 
-       // close(clientfd);
-
-
-        server->clientfp = fdopen(server->clientfd, "w");
-        /* Call router */
-        server->route(server->uri, server->clientfp);
-        /* Tidy up */
-        fflush(server->clientfp);
-        shutdown(server->clientfd, SHUT_WR);
-        close(server->clientfd);
+        FILE *clientfp = fdopen(clientfd, "w");
+        if (clientfp) {
+            /* Call router */
+            server->route(uri, clientfp);
+            /* Tidy up */
+            fflush(clientfp);
+            shutdown(clientfd, SHUT_WR);
+            fclose(clientfp);
+        } else {
+            close(clientfd);
+        }
     }
     server->clients[n] = -1;
+    membuf_fini(&buf);
+    return NULL;
 }
 
