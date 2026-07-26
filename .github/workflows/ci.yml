@@ -13,7 +13,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libmd4c-dev libssl-dev clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmd4c-dev libssl-dev clang pkg-config
+          # Show what md4c libraries are available
+          pkg-config --libs md4c-html md4c 2>/dev/null || true
+          ls -la /usr/lib/x86_64-linux-gnu/libmd4c* 2>/dev/null || true
 
       - name: make hardened
         run: make hardened
@@ -27,7 +32,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libmd4c-dev libssl-dev clang-tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmd4c-dev libmd4c-html-dev libssl-dev clang-tools || \
+            sudo apt-get install -y libmd4c-dev libssl-dev clang-tools
 
       - name: scan-build (our code only, mongoose is vendored)
         run: |
