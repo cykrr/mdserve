@@ -10,6 +10,14 @@
 #include "membuf.h"
 #include "mongoose.h"
 
+/* mongoose log callback that writes to stderr instead of stdout.
+ * stdout output is silently lost during mg_mgr_poll on Linux (likely
+ * epoll fd collision with fd 1). stderr reaches journald reliably. */
+static void log_to_stderr(char c, void *param) {
+  (void) param;
+  putc(c, stderr);
+}
+
 /* Private/reserved IPv4 ranges we refuse to connect to. */
 static int is_private_ipv4(uint32_t ip_host) {
   uint32_t ip = ntohl(ip_host);
@@ -545,7 +553,10 @@ int main(int argc, char *argv[])
 
   mg_mgr_init(&mgr);
   mg_log_set(MG_LL_INFO);
-  setlinebuf(stdout);  /* line-buffered stdout so logs reach journald */
+  /* mongoose logs go to stdout by default, but during mg_mgr_poll
+   * stdout output is lost (epoll/socket machinery seems to interact
+   * with fd 1). Redirect to stderr which journald captures reliably. */
+  mg_log_set_fn(log_to_stderr, NULL);
 
   if (mg_http_listen(&mgr, url, route, (void *) root) == NULL) {
     MG_ERROR(("no se pudo escuchar en %s", url));
