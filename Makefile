@@ -1,7 +1,7 @@
 CC      = gcc
 CFLAGS  = -Wall -Wextra -Wshadow -O2 -D_GNU_SOURCE -Iinclude -I.
-MGFLAGS = -DMG_ENABLE_DIRLIST=1
-LDLIBS  = -lmd4c-html -lmd4c
+MGFLAGS = -DMG_ENABLE_DIRLIST=1 -DMG_ENABLE_IPV6=1 -DMG_TLS=MG_TLS_OPENSSL
+LDLIBS  = -lmd4c-html -lmd4c -lssl -lcrypto
 
 OBJS = main.o md.o membuf.o mongoose.o
 

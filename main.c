@@ -1,11 +1,51 @@
+#include <arpa/inet.h>
 #include <dirent.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #include "md.h"
+#include "membuf.h"
 #include "mongoose.h"
+
+/* mongoose log callback that writes to stderr instead of stdout.
+ * stdout output is silently lost during mg_mgr_poll on Linux (likely
+ * epoll fd collision with fd 1). stderr reaches journald reliably. */
+static void log_to_stderr(char c, void *param) {
+  (void) param;
+  putc(c, stderr);
+}
+
+/* Private/reserved IPv4 ranges we refuse to connect to. */
+static int is_private_ipv4(uint32_t ip_host) {
+  uint32_t ip = ntohl(ip_host);
+  return (ip >> 24) == 10                     /* 10.0.0.0/8       */
+      || (ip >> 24) == 127                    /* 127.0.0.0/8      */
+      || (ip >> 16) == 0xa9fe                 /* 169.254.0.0/16   */
+      || (ip >> 20) == 0xac1                  /* 172.16.0.0/12    */
+      || (ip >> 16) == 0xc0a8                 /* 192.168.0.0/16   */
+      || (ip >> 22) == 0x1901                 /* 100.64.0.0/10    */
+      || (ip >> 24) == 0                      /* 0.0.0.0/8        */
+      || (ip >> 28) == 0xe                    /* 224.0.0.0/4      */
+      || (ip >> 28) == 0xf;                   /* 240.0.0.0/4      */
+}
+
+/* Returns 1 if the host portion of a URL looks like a raw IP address. */
+static int is_ip_host(const char *host, size_t len) {
+  if (len == 0) return 0;
+  /* IPv6 in brackets: [::1] */
+  if (host[0] == '[') return 1;
+  /* IPv4 starts with digit */
+  if (host[0] >= '0' && host[0] <= '9') {
+    for (size_t i = 1; i < len; i++)
+      if (host[i] != '.' && (host[i] < '0' || host[i] > '9'))
+        return 0;
+    return 1;
+  }
+  return 0;
+}
 
 /* Defaults para correr desde el repo. En el servidor se pasan por argv:
  *
@@ -75,6 +115,12 @@ static void serve_403(struct mg_connection *c)
                 "<h1>Error 403: Forbidden</h1>\n");
 }
 
+static void serve_400(struct mg_connection *c)
+{
+  mg_http_reply(c, 400, "Content-Type: text/html\r\n",
+                "<h1>Error 400: Bad Request</h1>\n");
+}
+
 /* Renderiza a HTML un .md ya resuelto a ruta local, envuelto en head.html y
  * tail.html.
  *
@@ -129,6 +175,236 @@ static void serve_markdown(struct mg_connection *c, struct mg_http_message *hm,
   }
 
   render_markdown(c, path);
+}
+
+/* Context for remote fetch: holds the original server connection so we can
+ * reply when the fetch completes. */
+struct remote_ctx {
+  struct mg_connection *server_conn;  /* original server connection */
+  char *url;                          /* remote URL being fetched */
+};
+
+/* Client event handler for the outbound HTTP fetch.
+ * On MG_EV_CONNECT, send the GET request.
+ * On MG_EV_HTTP_MSG, process response and reply to server_conn. */
+static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_data)
+{
+  struct remote_ctx *ctx = (struct remote_ctx *) nc->fn_data;
+  struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+  char *html = NULL;
+
+  if (ev == MG_EV_CONNECT) {
+    /* Connection established — reject private/reserved IPs. */
+    if (!nc->rem.is_ip6 && is_private_ipv4(nc->rem.addr.ip4)) {
+      MG_ERROR(("rejected private IP for %s", ctx->url));
+      mg_http_reply(ctx->server_conn, 403, "Content-Type: text/html\r\n",
+                    "<h1>Error 403: Private IPs are not allowed</h1>\n");
+      free(ctx->url);
+      free(ctx);
+      nc->is_draining = 1;
+      return;
+    }
+    if (nc->is_client && nc->is_udp == 0) {
+      if (strncmp(ctx->url, "https://", 8) == 0) {
+        /* For HTTPS, init TLS and wait for MG_EV_TLS_HS before sending GET */
+        /* Extract hostname for SNI */
+        const char *h = ctx->url + 8;
+        const char *slash = strchr(h, '/');
+        char sni_host[256];
+        if (slash)
+          mg_snprintf(sni_host, sizeof(sni_host), "%.*s", (int)(slash - h), h);
+        else
+          mg_snprintf(sni_host, sizeof(sni_host), "%s", h);
+        struct mg_tls_opts opts = { .skip_verification = true,
+                                    .name = mg_str(sni_host) };
+        mg_tls_init(nc, &opts);
+        MG_INFO(("TLS init done for %s", ctx->url));
+      } else {
+        /* For plain HTTP, send GET immediately */
+        const char *host_start = strstr(ctx->url, "://");
+        if (host_start) host_start += 3;
+        else host_start = ctx->url;
+        const char *host_end = strchr(host_start, '/');
+        char host[256];
+        if (host_end)
+          mg_snprintf(host, sizeof(host), "%.*s", (int)(host_end - host_start), host_start);
+        else
+          mg_snprintf(host, sizeof(host), "%s", host_start);
+        mg_printf(nc, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                  host_end ? host_end : "/", host);
+        MG_INFO(("sent HTTP GET to %s", host));
+      }
+    }
+  } else if (ev == MG_EV_TLS_HS) {
+    /* TLS handshake succeeded; send GET request */
+    const char *host_start = strstr(ctx->url, "://");
+    if (host_start) host_start += 3;
+    else host_start = ctx->url;
+    const char *host_end = strchr(host_start, '/');
+    char host[256];
+    if (host_end)
+      mg_snprintf(host, sizeof(host), "%.*s", (int)(host_end - host_start), host_start);
+    else
+      mg_snprintf(host, sizeof(host), "%s", host_start);
+    mg_printf(nc, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+              host_end ? host_end : "/", host);
+    MG_INFO(("TLS handshake done, sent HTTPS GET to %s", host));
+  } else if (ev == MG_EV_ERROR) {
+    MG_ERROR(("remote connection error: %s", ctx->url));
+    mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+                  "<h1>Error 502: Remote connection failed</h1>\n");
+    free(ctx->url);
+    free(ctx);
+    nc->is_draining = 1;
+  } else if (ev == MG_EV_HTTP_MSG) {
+    /* Full HTTP response received */
+    if (hm == NULL || hm->body.len == 0) {
+      MG_ERROR(("remote fetch failed or empty: %s", ctx->url));
+      mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+                    "<h1>Error 502: Failed to fetch remote URL</h1>\n");
+      goto cleanup;
+    }
+
+    if (hm->message.len > 0 && hm->message.buf[0] != 'H') {
+      /* Not an HTTP response (e.g. TLS error) */
+      MG_ERROR(("remote fetch error: %.*s", (int) hm->message.len, hm->message.buf));
+      mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+                    "<h1>Error 502: Remote fetch failed</h1>\n");
+      goto cleanup;
+    }
+
+    if (hm->message.len > 0 && strncmp(hm->message.buf, "HTTP/1.1 200", 12) != 0 &&
+        strncmp(hm->message.buf, "HTTP/1.0 200", 12) != 0) {
+      MG_ERROR(("remote HTTP error: %.*s", (int) hm->message.len, hm->message.buf));
+      mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+                    "<h1>Error 502: Remote server error</h1>\n");
+      goto cleanup;
+    }
+
+    /* Parse fetched markdown to HTML */
+    struct membuffer buf = { .data = (char *) hm->body.buf, .asize = hm->body.len, .size = hm->body.len };
+    FILE *mem = fmemopen(buf.data, buf.size, "r");
+    if (!mem) {
+      mg_http_reply(ctx->server_conn, 500, "Content-Type: text/html\r\n",
+                    "<h1>Error 500: Cannot read response body</h1>\n");
+      goto cleanup;
+    }
+
+    html = md_to_html(mem);
+    fclose(mem);
+
+    if (!html) {
+      mg_http_reply(ctx->server_conn, 500, "Content-Type: text/html\r\n",
+                    "<h1>Error 500: Failed to parse markdown</h1>\n");
+      goto cleanup;
+    }
+
+    /* Send rendered HTML wrapped in head/tail templates */
+    mg_printf(ctx->server_conn, "HTTP/1.1 200 OK\r\n"
+                 "Content-Type: text/html; charset=utf-8\r\n"
+                 "Transfer-Encoding: chunked\r\n\r\n");
+    cat_file(ctx->server_conn, "head.html");
+    mg_http_printf_chunk(ctx->server_conn, "<p>Fuente: <a href=\"%s\">%s</a></p>\n",
+                         ctx->url, ctx->url);
+    mg_http_printf_chunk(ctx->server_conn, "%s", html);
+    cat_file(ctx->server_conn, "tail.html");
+    mg_http_printf_chunk(ctx->server_conn, "");
+
+cleanup:
+    free(html);
+    free(ctx->url);
+    free(ctx);
+    /* Close the client connection (server connection stays open until chunked response ends) */
+    nc->is_draining = 1;
+  }
+}
+
+/* Serve a remote markdown file via /remote/<url-encoded-remote-url> */
+static void serve_remote(struct mg_connection *c, struct mg_http_message *hm,
+                         const char *root)
+{
+  (void) root;
+  /* URI format: /remote/<url-encoded-remote-url> */
+  const char prefix[] = "/remote/";
+  if (hm->uri.len <= sizeof(prefix) - 1) {
+    serve_404(c);
+    return;
+  }
+
+  /* Extract and URL-decode the remote URL */
+  struct mg_str encoded = mg_str_n(hm->uri.buf + sizeof(prefix) - 1,
+                                    hm->uri.len - (sizeof(prefix) - 1));
+  char *url = malloc(encoded.len + 1);
+  if (!url) {
+    mg_http_reply(c, 500, "Content-Type: text/html\r\n",
+                  "<h1>Error 500: Out of memory</h1>\n");
+    return;
+  }
+  int n = mg_url_decode(encoded.buf, encoded.len, url, encoded.len + 1, 0);
+  if (n < 0) {
+    free(url);
+    serve_400(c);
+    return;
+  }
+  url[n] = '\0';
+
+  /* Basic scheme validation */
+  if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
+    free(url);
+    serve_400(c);
+    return;
+  }
+
+  /* Extract host and path for validation */
+  const char *host_start = strstr(url, "://");
+  host_start = host_start ? host_start + 3 : url;
+  const char *path_start = strchr(host_start, '/');
+  size_t host_len = path_start ? (size_t)(path_start - host_start) : strlen(host_start);
+
+  /* Reject raw IP addresses as host */
+  if (is_ip_host(host_start, host_len)) {
+    free(url);
+    serve_403(c);
+    return;
+  }
+
+  /* Only allow .md files */
+  if (!path_start || path_start[1] == '\0') {
+    free(url);
+    serve_400(c);
+    return;
+  }
+  size_t path_len = strlen(path_start);
+  if (path_len < 3 || strcmp(path_start + path_len - 3, ".md") != 0) {
+    free(url);
+    serve_400(c);
+    return;
+  }
+
+  MG_INFO(("fetching remote markdown: %s", url));
+
+  /* Allocate context for the fetch callback */
+  struct remote_ctx *ctx = calloc(1, sizeof(*ctx));
+  if (!ctx) {
+    free(url);
+    mg_http_reply(c, 500, "Content-Type: text/html\r\n",
+                  "<h1>Error 500: Out of memory</h1>\n");
+    return;
+  }
+  ctx->server_conn = c;
+  ctx->url = url;
+
+  /* Start async fetch; callback will send the response to server_conn */
+  struct mg_connection *nc = mg_http_connect(c->mgr, url, remote_client_handler, ctx);
+  if (!nc) {
+    MG_ERROR(("mg_http_connect failed for %s", url));
+    mg_http_reply(c, 500, "Content-Type: text/html\r\n",
+                  "<h1>Error 500: Fetch initiation failed</h1>\n");
+    free(ctx->url);
+    free(ctx);
+    return;
+  }
+  /* Connection stays open; response sent in remote_client_handler */
 }
 
 /* Listado de directorio usando los mismos templates que las notas.
@@ -215,7 +491,9 @@ static void route(struct mg_connection *c, int ev, void *ev_data)
 
   /* En los patrones de mg_match(), '#' matchea cualquier secuencia
    * incluyendo '/'; '*' se detiene en la barra. */
-  if (mg_match(hm->uri, mg_str("#.md"), NULL)) {
+  if (mg_match(hm->uri, mg_str("/remote/#"), NULL)) {
+    serve_remote(c, hm, root);
+  } else if (mg_match(hm->uri, mg_str("#.md"), NULL)) {
     serve_markdown(c, hm, root);
   } else if (!uri_to_local_path(hm->uri, root, path, sizeof(path))) {
     serve_403(c);
@@ -274,6 +552,14 @@ int main(int argc, char *argv[])
   }
 
   mg_mgr_init(&mgr);
+  mg_log_set(MG_LL_INFO);
+  /* IPv6-only VPS: use DNS64 so IPv4-only hosts (GitHub) resolve. */
+  mgr.use_dns6 = true;
+  mgr.dns6.url = "udp://[2001:4860:4860::6464]:53";  /* Google DNS64 */
+  /* mongoose logs go to stdout by default, but during mg_mgr_poll
+   * stdout output is lost (epoll/socket machinery seems to interact
+   * with fd 1). Redirect to stderr which journald captures reliably. */
+  mg_log_set_fn(log_to_stderr, NULL);
 
   if (mg_http_listen(&mgr, url, route, (void *) root) == NULL) {
     MG_ERROR(("no se pudo escuchar en %s", url));
