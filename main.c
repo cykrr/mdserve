@@ -545,6 +545,7 @@ int main(int argc, char *argv[])
 
   mg_mgr_init(&mgr);
   mg_log_set(MG_LL_INFO);
+  setlinebuf(stdout);  /* line-buffered stdout so logs reach journald */
 
   if (mg_http_listen(&mgr, url, route, (void *) root) == NULL) {
     MG_ERROR(("no se pudo escuchar en %s", url));
