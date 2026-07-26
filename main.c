@@ -553,6 +553,9 @@ int main(int argc, char *argv[])
 
   mg_mgr_init(&mgr);
   mg_log_set(MG_LL_INFO);
+  /* IPv6-only VPS: use DNS64 so IPv4-only hosts (GitHub) resolve. */
+  mgr.use_dns6 = true;
+  mgr.dns6.url = "udp://[2001:4860:4860::6464]:53";  /* Google DNS64 */
   /* mongoose logs go to stdout by default, but during mg_mgr_poll
    * stdout output is lost (epoll/socket machinery seems to interact
    * with fd 1). Redirect to stderr which journald captures reliably. */
