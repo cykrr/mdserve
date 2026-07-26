@@ -84,20 +84,30 @@ static struct membuffer process_file(FILE* in)
   ret = md_html(buf_in.data, buf_in.size, process_output, (void*) &buf_out,
           parser_flags, renderer_flags);
 
-  if(ret != 0)
-      fprintf(stderr, "Parsing failed.\n");
   membuf_fini(&buf_in);
+
+  if(ret != 0) {
+      fprintf(stderr, "Parsing failed.\n");
+      membuf_fini(&buf_out);
+      buf_out.data = NULL;
+      return buf_out;
+  }
+
+  /* md4c emite bytes crudos, sin terminador. Agregamos el NUL para que el
+   * llamador pueda tratar buf_out.data como string ("%s"); si no, el printf
+   * lee más allá del malloc hasta encontrar un cero por casualidad. */
+  membuf_append(&buf_out, "", 1);
+
   return buf_out;
 }
 
 
 
-static const char* input_path = NULL;
-static const char* output_path = NULL;
-
-
-/* Recibe un nombre de archivo markdown y retorna
- * el código convertido a html
+/* Recibe un archivo markdown abierto y retorna el código convertido a html.
+ *
+ * El string retornado está NUL-terminado y es propiedad del llamador: hay que
+ * liberarlo con free(). Retorna NULL si el archivo es inválido o si el parseo
+ * falló, así el caso de error no devuelve algo que no se puede liberar.
  */
 
 char *md_to_html(FILE *file)
@@ -105,7 +115,7 @@ char *md_to_html(FILE *file)
   struct membuffer ret = {0};
 
   if (!file) {
-    return "md_to_html() No existe el archivo\n";
+    return NULL;
   }
 
   ret = process_file(file);
