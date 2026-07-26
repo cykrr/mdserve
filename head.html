@@ -2,14 +2,115 @@
 
 <html lang="en">
   <head>
-    <title></title>
+    <title>notes</title>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet"
     href="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css"
     crossorigin = "anonymous">
 
-    <link rel="stylesheet" href = "/dist/index.css">
+    <!-- El CSS va inline a proposito: mdserve sirve el directorio de notas
+         como root, asi que una ruta tipo /dist/index.css caeria dentro de las
+         notas y no del instalado. Inline funciona con cualquier root. -->
+    <style>
+      :root {
+        --bg:     #fffdf9;
+        --fg:     #1f1f1c;
+        --muted:  #6b6b63;
+        --accent: #8a5a2b;
+        --rule:   #e5e1d8;
+        --code:   #f2efe7;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg:     #16161a;
+          --fg:     #e4e2dc;
+          --muted:  #9a978e;
+          --accent: #d8a76a;
+          --rule:   #2c2c32;
+          --code:   #1f1f25;
+        }
+      }
+
+      *, *::before, *::after { box-sizing: border-box; }
+
+      html { -webkit-text-size-adjust: 100%; }
+
+      body {
+        margin: 0 auto;
+        padding: 3.5rem 1.25rem 6rem;
+        max-width: 44rem;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                     "Helvetica Neue", Arial, sans-serif;
+        font-size: 1.0625rem;
+        line-height: 1.65;
+      }
+
+      h1, h2, h3, h4, h5, h6 {
+        line-height: 1.25;
+        margin: 2.25rem 0 0.75rem;
+        font-weight: 600;
+      }
+      h1 { font-size: 1.9rem; margin-top: 0; letter-spacing: -0.02em; }
+      h2 { font-size: 1.45rem; }
+      h3 { font-size: 1.2rem; }
+      h4, h5, h6 { font-size: 1rem; }
+      h2, h3 { border-bottom: 1px solid var(--rule); padding-bottom: 0.25rem; }
+
+      p, ul, ol, blockquote, pre, table { margin: 0 0 1.15rem; }
+
+      a { color: var(--accent); text-decoration: underline;
+          text-underline-offset: 2px; }
+      a:hover { text-decoration-thickness: 2px; }
+
+      ul, ol { padding-left: 1.5rem; }
+      li { margin: 0.25rem 0; }
+      li > ul, li > ol { margin: 0.25rem 0; }
+
+      blockquote {
+        margin-left: 0;
+        padding: 0.1rem 0 0.1rem 1rem;
+        border-left: 3px solid var(--rule);
+        color: var(--muted);
+      }
+
+      code, kbd, samp {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                     "Liberation Mono", monospace;
+        font-size: 0.9em;
+      }
+
+      :not(pre) > code {
+        background: var(--code);
+        padding: 0.15em 0.4em;
+        border-radius: 4px;
+      }
+
+      pre {
+        background: var(--code);
+        padding: 0.9rem 1rem;
+        border-radius: 6px;
+        overflow-x: auto;
+        line-height: 1.5;
+      }
+      pre code { background: none; padding: 0; }
+
+      table { border-collapse: collapse; width: 100%; display: block;
+              overflow-x: auto; }
+      th, td { padding: 0.45rem 0.7rem; border: 1px solid var(--rule);
+               text-align: left; }
+      th { background: var(--code); font-weight: 600; }
+
+      hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5rem 0; }
+
+      img { max-width: 100%; height: auto; }
+
+      /* KaTeX en display no debe desbordar en pantallas chicas. */
+      .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.25rem 0; }
+    </style>
 
     <!-- The loading of KaTeX is deferred to speed up page rendering -->
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.js" integrity="sha384-X/XCfMm41VSsqRNQgDerQczD69XqmjOOOwYQvr/uuC+j4OPoNhVgjdGFwhvN02Ja" crossorigin="anonymous"></script>
@@ -22,4 +123,4 @@
 ]});'></script>
   </head>
   <body>
-  
+

@@ -61,7 +61,9 @@ static void serve_404(struct mg_connection *c)
   mg_printf(c, "HTTP/1.1 404 Not Found\r\n"
                "Content-Type: text/html; charset=utf-8\r\n"
                "Transfer-Encoding: chunked\r\n\r\n");
+  cat_file(c, "head.html");
   cat_file(c, "404.html");
+  cat_file(c, "tail.html");
   mg_http_printf_chunk(c, "");
 }
 

@@ -35,8 +35,13 @@
 
 
 
-/* Global options. */
-static unsigned parser_flags = 0;
+/* Global options.
+ *
+ * Dialecto GitHub: tablas, strikethrough, task lists y autolinks permisivos.
+ * A proposito NO se activa MD_FLAG_LATEXMATHSPANS: head.html carga KaTeX con
+ * auto-render, que busca los "$...$" en el texto ya renderizado. Si md4c se
+ * los come primero, KaTeX no encuentra nada que renderizar. */
+static unsigned parser_flags = MD_DIALECT_GITHUB;
 
 #ifndef MD4C_USE_ASCII
 static unsigned renderer_flags = MD_HTML_FLAG_DEBUG | MD_HTML_FLAG_SKIP_UTF8_BOM;
