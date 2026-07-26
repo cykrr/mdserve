@@ -1,5 +1,7 @@
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
 #include "md.h"
@@ -73,19 +75,21 @@ static void serve_403(struct mg_connection *c)
                 "<h1>Error 403: Forbidden</h1>\n");
 }
 
-/* Renderiza un .md a HTML, envuelto en head.html y tail.html.
+/* Renderiza a HTML un .md ya resuelto a ruta local, envuelto en head.html y
+ * tail.html.
  *
  * Se responde en chunks para no tener que calcular el Content-Length de la
  * concatenación de los tres pedazos por adelantado. */
-static void serve_markdown(struct mg_connection *c, struct mg_http_message *hm,
-                           const char *root)
+static void render_markdown(struct mg_connection *c, const char *path)
 {
-  char path[MG_PATH_MAX];
+  struct stat st;
   FILE *file;
   char *html;
 
-  if (!uri_to_local_path(hm->uri, root, path, sizeof(path))) {
-    serve_403(c);
+  /* fopen() de un directorio funciona en Linux, y recién falla al leer: sin
+   * este chequeo un directorio llamado "algo.md" saldría como página vacía. */
+  if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+    serve_404(c);
     return;
   }
 
@@ -112,6 +116,82 @@ static void serve_markdown(struct mg_connection *c, struct mg_http_message *hm,
   mg_http_printf_chunk(c, "");  /* chunk vacío = fin de la respuesta */
 
   free(html);
+}
+
+static void serve_markdown(struct mg_connection *c, struct mg_http_message *hm,
+                           const char *root)
+{
+  char path[MG_PATH_MAX];
+
+  if (!uri_to_local_path(hm->uri, root, path, sizeof(path))) {
+    serve_403(c);
+    return;
+  }
+
+  render_markdown(c, path);
+}
+
+/* Listado de directorio usando los mismos templates que las notas.
+ *
+ * mg_http_serve_dir() ya trae uno, pero con su propio <style> embebido y un
+ * footer de mongoose, así que no pega ni con head.html ni con el resto.
+ *
+ * Esta función NO resuelve rutas: recibe un path que route() ya pasó por
+ * uri_to_local_path(), o sea que el chequeo de traversal ya corrió. Lo único
+ * que hace es leer el directorio.
+ *
+ * Los href son relativos al uri, así que route() garantiza que el uri termine
+ * en '/' antes de llegar acá. */
+static void serve_dirlist(struct mg_connection *c, struct mg_str uri,
+                          const char *path)
+{
+  struct dirent **names;
+  int n = scandir(path, &names, NULL, alphasort);
+  int i;
+
+  if (n < 0) {
+    serve_404(c);
+    return;
+  }
+
+  mg_printf(c, "HTTP/1.1 200 OK\r\n"
+               "Content-Type: text/html; charset=utf-8\r\n"
+               "Transfer-Encoding: chunked\r\n\r\n");
+  cat_file(c, "head.html");
+  mg_http_printf_chunk(c, "<h1>%M</h1>\n<ul class=\"dirlist\">\n",
+                       mg_print_html_esc, (int) uri.len, uri.buf);
+
+  if (uri.len > 1)
+    mg_http_printf_chunk(c, "  <li class=\"up\"><a href=\"..\">..</a></li>\n");
+
+  for (i = 0; i < n; i++) {
+    const char *name = names[i]->d_name;
+    char enc[MG_PATH_MAX], full[MG_PATH_MAX];
+    const char *slash = "";
+    struct stat st;
+
+    /* Se saltan "." y ".." de paso. */
+    if (name[0] == '.') {
+      free(names[i]);
+      continue;
+    }
+
+    mg_snprintf(full, sizeof(full), "%s/%s", path, name);
+    if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) slash = "/";
+
+    /* El nombre va URL-encodeado en el href y HTML-escapeado en el texto: un
+     * archivo puede llamarse '<img onerror=...>.md' y sería XSS reflejado. */
+    mg_url_encode(name, strlen(name), enc, sizeof(enc));
+    mg_http_printf_chunk(c, "  <li><a href=\"%s%s\">%M%s</a></li>\n",
+                         enc, slash,
+                         mg_print_html_esc, (int) strlen(name), name, slash);
+    free(names[i]);
+  }
+  free(names);
+
+  mg_http_printf_chunk(c, "</ul>\n");
+  cat_file(c, "tail.html");
+  mg_http_printf_chunk(c, "");
 }
 
 /* Handler de eventos de mongoose. Sólo nos interesa MG_EV_HTTP_MSG, que llega
@@ -146,9 +226,30 @@ static void route(struct mg_connection *c, int ev, void *ev_data)
      * archivo existe, igual delegamos y mongoose vuelve a resolver el path
      * con sus propios chequeos de traversal. */
     serve_404(c);
+  } else if (S_ISDIR(st.st_mode)) {
+    char index[MG_PATH_MAX];
+    struct stat ist;
+
+    if (hm->uri.buf[hm->uri.len - 1] != '/') {
+      /* Sin la barra final el browser resuelve los href relativos un nivel
+       * más arriba: /sub + "nota.md" daría /nota.md. */
+      mg_printf(c, "HTTP/1.1 301 Moved Permanently\r\n"
+                   "Location: %.*s/\r\n"
+                   "Content-Length: 0\r\n\r\n",
+                (int) hm->uri.len, hm->uri.buf);
+      return;
+    }
+
+    mg_snprintf(index, sizeof(index), "%s/index.md", path);
+
+    if (stat(index, &ist) == 0 && S_ISREG(ist.st_mode)) {
+      render_markdown(c, index);
+    } else {
+      serve_dirlist(c, hm->uri, path);
+    }
   } else {
-    /* Archivos estáticos y listado de directorios. mg_http_serve_dir() ya
-     * resuelve el path, chequea traversal, adivina el MIME y soporta Range. */
+    /* Archivos estáticos sueltos: mg_http_serve_dir() vuelve a resolver el
+     * path con sus propios chequeos, adivina el MIME y soporta Range. */
     mg_http_serve_dir(c, hm, &opts);
   }
 }

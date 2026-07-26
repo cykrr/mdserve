@@ -106,6 +106,21 @@
 
       hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5rem 0; }
 
+      /* Listado de directorio (serve_dirlist en main.c). */
+      .dirlist { list-style: none; padding-left: 0; }
+      .dirlist li { margin: 0; border-bottom: 1px solid var(--rule); }
+      .dirlist li:last-child { border-bottom: 0; }
+      .dirlist a {
+        display: block;
+        padding: 0.5rem 0.25rem;
+        text-decoration: none;
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+                     "Liberation Mono", monospace;
+        font-size: 0.95rem;
+      }
+      .dirlist a:hover { background: var(--code); }
+      .dirlist .up a { color: var(--muted); }
+
       img { max-width: 100%; height: auto; }
 
       /* KaTeX en display no debe desbordar en pantallas chicas. */
