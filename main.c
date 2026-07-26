@@ -256,8 +256,8 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
                  "Content-Type: text/html; charset=utf-8\r\n"
                  "Transfer-Encoding: chunked\r\n\r\n");
     cat_file(ctx->server_conn, "head.html");
-    mg_http_printf_chunk(ctx->server_conn, "<h1>%M</h1>\n",
-                         mg_print_html_esc, (int) strlen(ctx->url), ctx->url);
+    mg_http_printf_chunk(ctx->server_conn, "<p>Fuente: <a href=\"%s\">%s</a></p>\n",
+                         ctx->url, ctx->url);
     mg_http_printf_chunk(ctx->server_conn, "%s", html);
     cat_file(ctx->server_conn, "tail.html");
     mg_http_printf_chunk(ctx->server_conn, "");
