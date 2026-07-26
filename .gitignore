@@ -1,8 +1,8 @@
 
 .cache/clangd/index
-md.o
-a.out
 compile_commands.json
+a.out
 mdserve
-membuf.o
-server.o
+*.o
+/.claude
+/.tokensave

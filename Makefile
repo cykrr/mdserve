@@ -1,14 +1,27 @@
-mdserve: main.c md.o membuf.o server.o
-	gcc -DLINUX -D_REENTRANT -D_GNU_SOURCE -Iinclude -o mdserve main.c membuf.o md.o server.o -lmd4c-html -lmd4c
+CC      = gcc
+CFLAGS  = -Wall -Wextra -Wshadow -O2 -D_GNU_SOURCE -Iinclude -I.
+MGFLAGS = -DMG_ENABLE_DIRLIST=1
+LDLIBS  = -lmd4c-html -lmd4c
+
+OBJS = main.o md.o membuf.o mongoose.o
+
+mdserve: $(OBJS)
+	$(CC) -o $@ $(OBJS) $(LDLIBS)
+
+main.o: main.c
+	$(CC) $(CFLAGS) $(MGFLAGS) -c main.c
 
 md.o: src/md.c
-	gcc -c src/md.c -Iinclude
+	$(CC) $(CFLAGS) -c src/md.c
 
 membuf.o: src/membuf.c
-	gcc -c src/membuf.c -Iinclude 
+	$(CC) $(CFLAGS) -c src/membuf.c
 
-server.o: src/server.c
-	gcc -c src/server.c -Iinclude 
+# mongoose es código vendorizado: se compila sin nuestros warnings.
+mongoose.o: mongoose.c
+	$(CC) -O2 -D_GNU_SOURCE -I. $(MGFLAGS) -c mongoose.c
 
 clean:
 	rm -f mdserve *.o
+
+.PHONY: clean
