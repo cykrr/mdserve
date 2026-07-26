@@ -45,4 +45,6 @@ test: mdserve
 clean:
 	rm -f mdserve *.o
 
-.PHONY: clean hardened test
+all: mdserve
+
+.PHONY: all clean hardened test

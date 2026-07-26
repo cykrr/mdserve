@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [master, remote-fetch]
+  pull_request:
+    branches: [master]
+
+jobs:
+  hardened:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmd4c-dev libssl-dev clang
+
+      - name: make hardened
+        run: make hardened
+
+      - name: make test
+        run: make test
+
+  analyzer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmd4c-dev libssl-dev clang-tools
+
+      - name: scan-build (our code only, mongoose is vendored)
+        run: |
+          scan-build --status-bugs gcc -Wall -Wextra -O2 -D_GNU_SOURCE -Iinclude -I. \
+            -D_FORTIFY_SOURCE=2 -fstack-protector-strong \
+            -DMG_ENABLE_DIRLIST=1 -DMG_ENABLE_IPV6=1 -DMG_TLS=MG_TLS_OPENSSL \
+            -c main.c src/md.c src/membuf.c
