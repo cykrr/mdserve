@@ -1,4 +1,6 @@
+#include <arpa/inet.h>
 #include <dirent.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +9,35 @@
 #include "md.h"
 #include "membuf.h"
 #include "mongoose.h"
+
+/* Private/reserved IPv4 ranges we refuse to connect to. */
+static int is_private_ipv4(uint32_t ip_host) {
+  uint32_t ip = ntohl(ip_host);
+  return (ip >> 24) == 10                     /* 10.0.0.0/8       */
+      || (ip >> 24) == 127                    /* 127.0.0.0/8      */
+      || (ip >> 16) == 0xa9fe                 /* 169.254.0.0/16   */
+      || (ip >> 20) == 0xac1                  /* 172.16.0.0/12    */
+      || (ip >> 16) == 0xc0a8                 /* 192.168.0.0/16   */
+      || (ip >> 22) == 0x1901                 /* 100.64.0.0/10    */
+      || (ip >> 24) == 0                      /* 0.0.0.0/8        */
+      || (ip >> 28) == 0xe                    /* 224.0.0.0/4      */
+      || (ip >> 28) == 0xf;                   /* 240.0.0.0/4      */
+}
+
+/* Returns 1 if the host portion of a URL looks like a raw IP address. */
+static int is_ip_host(const char *host, size_t len) {
+  if (len == 0) return 0;
+  /* IPv6 in brackets: [::1] */
+  if (host[0] == '[') return 1;
+  /* IPv4 starts with digit */
+  if (host[0] >= '0' && host[0] <= '9') {
+    for (size_t i = 1; i < len; i++)
+      if (host[i] != '.' && (host[i] < '0' || host[i] > '9'))
+        return 0;
+    return 1;
+  }
+  return 0;
+}
 
 /* Defaults para correr desde el repo. En el servidor se pasan por argv:
  *
@@ -155,7 +186,16 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
   char *html = NULL;
 
   if (ev == MG_EV_CONNECT) {
-    /* Connection established. */
+    /* Connection established — reject private/reserved IPs. */
+    if (!nc->rem.is_ip6 && is_private_ipv4(nc->rem.addr.ip4)) {
+      MG_ERROR(("rejected private IP for %s", ctx->url));
+      mg_http_reply(ctx->server_conn, 403, "Content-Type: text/html\r\n",
+                    "<h1>Error 403: Private IPs are not allowed</h1>\n");
+      free(ctx->url);
+      free(ctx);
+      nc->is_draining = 1;
+      return;
+    }
     if (nc->is_client && nc->is_udp == 0) {
       if (strncmp(ctx->url, "https://", 8) == 0) {
         /* For HTTPS, init TLS and wait for MG_EV_TLS_HS before sending GET */
@@ -302,6 +342,32 @@ static void serve_remote(struct mg_connection *c, struct mg_http_message *hm,
 
   /* Basic scheme validation */
   if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) {
+    free(url);
+    serve_400(c);
+    return;
+  }
+
+  /* Extract host and path for validation */
+  const char *host_start = strstr(url, "://");
+  host_start = host_start ? host_start + 3 : url;
+  const char *path_start = strchr(host_start, '/');
+  size_t host_len = path_start ? (size_t)(path_start - host_start) : strlen(host_start);
+
+  /* Reject raw IP addresses as host */
+  if (is_ip_host(host_start, host_len)) {
+    free(url);
+    serve_403(c);
+    return;
+  }
+
+  /* Only allow .md files */
+  if (!path_start || path_start[1] == '\0') {
+    free(url);
+    serve_400(c);
+    return;
+  }
+  size_t path_len = strlen(path_start);
+  if (path_len < 3 || strcmp(path_start + path_len - 3, ".md") != 0) {
     free(url);
     serve_400(c);
     return;
