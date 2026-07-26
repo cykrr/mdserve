@@ -5,15 +5,19 @@
 #include "md.h"
 #include "mongoose.h"
 
-/* Directorio que se expone por HTTP. Sólo esto es visible desde afuera: el
- * resto del repo (.git/, fuentes, dotfiles) queda fuera del alcance.
- * Los templates (head.html, tail.html, 404.html) no pasan por acá, se abren
- * con fopen() relativo al cwd. */
+/* Defaults para correr desde el repo. En el servidor se pasan por argv:
+ *
+ *   mdserve http://100.64.0.12:8080 /home/user/notes
+ *
+ * Conviene pasar una IP concreta y no 0.0.0.0: en una VM con IP pública,
+ * el wildcard publica el servidor en todas las interfaces, y mdserve no
+ * tiene ni auth ni TLS. */
 #define ROOT_DIR   "./md"
 #define LISTEN_URL "http://0.0.0.0:8080"
 
 /* Vuelca un archivo del disco en la respuesta chunked ya iniciada.
- * Se usa para head.html / tail.html, que envuelven el markdown renderizado. */
+ * Se usa para head.html / tail.html / 404.html, que son del instalado y no de
+ * las notas: se abren relativo al cwd, no al root que se sirve. */
 static void cat_file(struct mg_connection *c, const char *filename)
 {
   char line[2048];
@@ -25,7 +29,7 @@ static void cat_file(struct mg_connection *c, const char *filename)
   fclose(in);
 }
 
-/* Traduce el URI de una request a una ruta local bajo ROOT_DIR.
+/* Traduce el URI de una request a una ruta local bajo root.
  *
  * Mismo procedimiento que usa mongoose internamente: primero decodifica los
  * %XX, después valida con mg_path_is_sane() (rechaza "~" inicial, ".." inicial
@@ -35,7 +39,8 @@ static void cat_file(struct mg_connection *c, const char *filename)
  * convierte en ".." justo a tiempo para el fopen().
  *
  * Retorna 0 si el URI no entra en el buffer o intenta escapar del root. */
-static int uri_to_local_path(struct mg_str uri, char *dst, size_t dst_len)
+static int uri_to_local_path(struct mg_str uri, const char *root,
+                             char *dst, size_t dst_len)
 {
   char decoded[MG_PATH_MAX];
   int n = mg_url_decode(uri.buf, uri.len, decoded, sizeof(decoded), 0);
@@ -43,7 +48,7 @@ static int uri_to_local_path(struct mg_str uri, char *dst, size_t dst_len)
   if (n < 0) return 0;  /* no entra en el buffer, o %XX mal formado */
   if (!mg_path_is_sane(mg_str_n(decoded, (size_t) n))) return 0;
 
-  mg_snprintf(dst, dst_len, "%s%s", ROOT_DIR, decoded);
+  mg_snprintf(dst, dst_len, "%s%s", root, decoded);
   return 1;
 }
 
@@ -70,13 +75,14 @@ static void serve_403(struct mg_connection *c)
  *
  * Se responde en chunks para no tener que calcular el Content-Length de la
  * concatenación de los tres pedazos por adelantado. */
-static void serve_markdown(struct mg_connection *c, struct mg_http_message *hm)
+static void serve_markdown(struct mg_connection *c, struct mg_http_message *hm,
+                           const char *root)
 {
   char path[MG_PATH_MAX];
   FILE *file;
   char *html;
 
-  if (!uri_to_local_path(hm->uri, path, sizeof(path))) {
+  if (!uri_to_local_path(hm->uri, root, path, sizeof(path))) {
     serve_403(c);
     return;
   }
@@ -107,11 +113,15 @@ static void serve_markdown(struct mg_connection *c, struct mg_http_message *hm)
 }
 
 /* Handler de eventos de mongoose. Sólo nos interesa MG_EV_HTTP_MSG, que llega
- * con la request entera ya parseada (línea, headers y body). */
+ * con la request entera ya parseada (línea, headers y body).
+ *
+ * El root a servir viaja en c->fn_data, que es el puntero que se le pasó a
+ * mg_http_listen(). */
 static void route(struct mg_connection *c, int ev, void *ev_data)
 {
   struct mg_http_message *hm;
-  struct mg_http_serve_opts opts = { .root_dir = ROOT_DIR };
+  const char *root = (const char *) c->fn_data;
+  struct mg_http_serve_opts opts = { .root_dir = root };
   char path[MG_PATH_MAX];
   struct stat st;
 
@@ -124,8 +134,8 @@ static void route(struct mg_connection *c, int ev, void *ev_data)
   /* En los patrones de mg_match(), '#' matchea cualquier secuencia
    * incluyendo '/'; '*' se detiene en la barra. */
   if (mg_match(hm->uri, mg_str("#.md"), NULL)) {
-    serve_markdown(c, hm);
-  } else if (!uri_to_local_path(hm->uri, path, sizeof(path))) {
+    serve_markdown(c, hm, root);
+  } else if (!uri_to_local_path(hm->uri, root, path, sizeof(path))) {
     serve_403(c);
   } else if (stat(path, &st) != 0) {
     /* Cortocircuito para devolver el 404 con el status correcto.
@@ -141,18 +151,33 @@ static void route(struct mg_connection *c, int ev, void *ev_data)
   }
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
   struct mg_mgr mgr;
+  const char *url  = argc > 1 ? argv[1] : LISTEN_URL;
+  const char *root = argc > 2 ? argv[2] : ROOT_DIR;
+  struct stat st;
 
-  mg_mgr_init(&mgr);
+  if (argc > 3) {
+    fprintf(stderr, "uso: %s [listen-url] [root-dir]\n", argv[0]);
+    return 2;
+  }
 
-  if (mg_http_listen(&mgr, LISTEN_URL, route, NULL) == NULL) {
-    MG_ERROR(("no se pudo escuchar en %s", LISTEN_URL));
+  /* Fallar acá y no en cada request: si el root no existe, todo responde 404
+   * y parece un problema de rutas. */
+  if (stat(root, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    MG_ERROR(("root-dir no es un directorio: %s", root));
     return 1;
   }
 
-  MG_INFO(("mdserve escuchando en %s, root=%s", LISTEN_URL, ROOT_DIR));
+  mg_mgr_init(&mgr);
+
+  if (mg_http_listen(&mgr, url, route, (void *) root) == NULL) {
+    MG_ERROR(("no se pudo escuchar en %s", url));
+    return 1;
+  }
+
+  MG_INFO(("mdserve escuchando en %s, root=%s", url, root));
   for (;;) mg_mgr_poll(&mgr, 1000);
 
   mg_mgr_free(&mgr);
