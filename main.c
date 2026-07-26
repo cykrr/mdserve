@@ -32,6 +32,26 @@ static int is_private_ipv4(uint32_t ip_host) {
       || (ip >> 28) == 0xf;                   /* 240.0.0.0/4      */
 }
 
+/* Private/reserved IPv6 ranges. */
+static int is_private_ipv6(const uint8_t ip[16]) {
+  /* ::1/128 — loopback */
+  static const uint8_t zero[15] = {0};
+  if (memcmp(ip, zero, 15) == 0 && ip[15] == 1) return 1;
+  /* ::/128 — unspecified */
+  if (memcmp(ip, zero, 15) == 0 && ip[15] == 0) return 1;
+  /* fc00::/7 — unique local */
+  if ((ip[0] & 0xfe) == 0xfc) return 1;
+  /* fe80::/10 — link-local */
+  if (ip[0] == 0xfe && (ip[1] & 0xc0) == 0x80) return 1;
+  /* ::ffff:0:0/96 — IPv4-mapped. Check the embedded IPv4 address. */
+  if (memcmp(ip, zero, 10) == 0 && ip[10] == 0xff && ip[11] == 0xff) {
+    uint32_t v4;
+    memcpy(&v4, ip + 12, 4);
+    return is_private_ipv4(v4);
+  }
+  return 0;
+}
+
 /* Returns 1 if the host portion of a URL looks like a raw IP address. */
 static int is_ip_host(const char *host, size_t len) {
   if (len == 0) return 0;
@@ -56,6 +76,7 @@ static int is_ip_host(const char *host, size_t len) {
  * tiene ni auth ni TLS. */
 #define ROOT_DIR   "./md"
 #define LISTEN_URL "http://0.0.0.0:8080"
+#define MAX_REMOTE_BODY (16 * 1024 * 1024)  /* 16 MB limit for remote fetches */
 
 /* Vuelca un archivo del disco en la respuesta chunked ya iniciada.
  * Se usa para head.html / tail.html / 404.html, que son del instalado y no de
@@ -102,6 +123,7 @@ static void serve_404(struct mg_connection *c)
 {
   mg_printf(c, "HTTP/1.1 404 Not Found\r\n"
                "Content-Type: text/html; charset=utf-8\r\n"
+               "X-Content-Type-Options: nosniff\r\n"
                "Transfer-Encoding: chunked\r\n\r\n");
   cat_file(c, "head.html");
   cat_file(c, "404.html");
@@ -132,10 +154,16 @@ static void render_markdown(struct mg_connection *c, const char *path)
   FILE *file;
   char *html;
 
-  /* fopen() de un directorio funciona en Linux, y recién falla al leer: sin
-   * este chequeo un directorio llamado "algo.md" saldría como página vacía. */
-  if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+  /* lstat() no sigue symlinks: un symlink a /etc/passwd dentro del root
+   * sería servido si usáramos stat(). lstat() lo detecta y rechaza. */
+  if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
     serve_404(c);
+    return;
+  }
+  /* Double-check with lstat: S_ISLNK shouldn't happen since lstat on a
+   * symlink returns the link itself (not a regular file), but belt-and-suspenders. */
+  if (S_ISLNK(st.st_mode)) {
+    serve_403(c);
     return;
   }
 
@@ -155,6 +183,7 @@ static void render_markdown(struct mg_connection *c, const char *path)
 
   mg_printf(c, "HTTP/1.1 200 OK\r\n"
                "Content-Type: text/html; charset=utf-8\r\n"
+               "X-Content-Type-Options: nosniff\r\n"
                "Transfer-Encoding: chunked\r\n\r\n");
   cat_file(c, "head.html");
   mg_http_printf_chunk(c, "%s", html);
@@ -195,9 +224,12 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
 
   if (ev == MG_EV_CONNECT) {
     /* Connection established — reject private/reserved IPs. */
-    if (!nc->rem.is_ip6 && is_private_ipv4(nc->rem.addr.ip4)) {
+    if ((!nc->rem.is_ip6 && is_private_ipv4(nc->rem.addr.ip4))
+        || (nc->rem.is_ip6 && is_private_ipv6(nc->rem.addr.ip))) {
       MG_ERROR(("rejected private IP for %s", ctx->url));
-      mg_http_reply(ctx->server_conn, 403, "Content-Type: text/html\r\n",
+      mg_http_reply(ctx->server_conn, 403,
+                    "Content-Type: text/html\r\n"
+                    "X-Content-Type-Options: nosniff\r\n",
                     "<h1>Error 403: Private IPs are not allowed</h1>\n");
       free(ctx->url);
       free(ctx);
@@ -251,7 +283,9 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     MG_INFO(("TLS handshake done, sent HTTPS GET to %s", host));
   } else if (ev == MG_EV_ERROR) {
     MG_ERROR(("remote connection error: %s", ctx->url));
-    mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+    mg_http_reply(ctx->server_conn, 502,
+                  "Content-Type: text/html\r\n"
+                  "X-Content-Type-Options: nosniff\r\n",
                   "<h1>Error 502: Remote connection failed</h1>\n");
     free(ctx->url);
     free(ctx);
@@ -260,7 +294,9 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     /* Full HTTP response received */
     if (hm == NULL || hm->body.len == 0) {
       MG_ERROR(("remote fetch failed or empty: %s", ctx->url));
-      mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+      mg_http_reply(ctx->server_conn, 502,
+                    "Content-Type: text/html\r\n"
+                    "X-Content-Type-Options: nosniff\r\n",
                     "<h1>Error 502: Failed to fetch remote URL</h1>\n");
       goto cleanup;
     }
@@ -268,7 +304,9 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     if (hm->message.len > 0 && hm->message.buf[0] != 'H') {
       /* Not an HTTP response (e.g. TLS error) */
       MG_ERROR(("remote fetch error: %.*s", (int) hm->message.len, hm->message.buf));
-      mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+      mg_http_reply(ctx->server_conn, 502,
+                    "Content-Type: text/html\r\n"
+                    "X-Content-Type-Options: nosniff\r\n",
                     "<h1>Error 502: Remote fetch failed</h1>\n");
       goto cleanup;
     }
@@ -276,8 +314,20 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     if (hm->message.len > 0 && strncmp(hm->message.buf, "HTTP/1.1 200", 12) != 0 &&
         strncmp(hm->message.buf, "HTTP/1.0 200", 12) != 0) {
       MG_ERROR(("remote HTTP error: %.*s", (int) hm->message.len, hm->message.buf));
-      mg_http_reply(ctx->server_conn, 502, "Content-Type: text/html\r\n",
+      mg_http_reply(ctx->server_conn, 502,
+                    "Content-Type: text/html\r\n"
+                    "X-Content-Type-Options: nosniff\r\n",
                     "<h1>Error 502: Remote server error</h1>\n");
+      goto cleanup;
+    }
+
+    /* Reject oversized responses before parsing */
+    if (hm->body.len > MAX_REMOTE_BODY) {
+      MG_ERROR(("remote body too large: %lu bytes", (unsigned long) hm->body.len));
+      mg_http_reply(ctx->server_conn, 413,
+                    "Content-Type: text/html\r\n"
+                    "X-Content-Type-Options: nosniff\r\n",
+                    "<h1>Error 413: Remote file too large</h1>\n");
       goto cleanup;
     }
 
@@ -285,7 +335,9 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     struct membuffer buf = { .data = (char *) hm->body.buf, .asize = hm->body.len, .size = hm->body.len };
     FILE *mem = fmemopen(buf.data, buf.size, "r");
     if (!mem) {
-      mg_http_reply(ctx->server_conn, 500, "Content-Type: text/html\r\n",
+      mg_http_reply(ctx->server_conn, 500,
+                    "Content-Type: text/html\r\n"
+                    "X-Content-Type-Options: nosniff\r\n",
                     "<h1>Error 500: Cannot read response body</h1>\n");
       goto cleanup;
     }
@@ -294,7 +346,9 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     fclose(mem);
 
     if (!html) {
-      mg_http_reply(ctx->server_conn, 500, "Content-Type: text/html\r\n",
+      mg_http_reply(ctx->server_conn, 500,
+                    "Content-Type: text/html\r\n"
+                    "X-Content-Type-Options: nosniff\r\n",
                     "<h1>Error 500: Failed to parse markdown</h1>\n");
       goto cleanup;
     }
@@ -302,6 +356,7 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     /* Send rendered HTML wrapped in head/tail templates */
     mg_printf(ctx->server_conn, "HTTP/1.1 200 OK\r\n"
                  "Content-Type: text/html; charset=utf-8\r\n"
+                 "X-Content-Type-Options: nosniff\r\n"
                  "Transfer-Encoding: chunked\r\n\r\n");
     cat_file(ctx->server_conn, "head.html");
     mg_http_printf_chunk(ctx->server_conn, "<p>Fuente: <a href=\"%s\">%s</a></p>\n",
@@ -432,6 +487,7 @@ static void serve_dirlist(struct mg_connection *c, struct mg_str uri,
 
   mg_printf(c, "HTTP/1.1 200 OK\r\n"
                "Content-Type: text/html; charset=utf-8\r\n"
+               "X-Content-Type-Options: nosniff\r\n"
                "Transfer-Encoding: chunked\r\n\r\n");
   cat_file(c, "head.html");
   mg_http_printf_chunk(c, "<h1>%M</h1>\n<ul class=\"dirlist\">\n",
@@ -453,7 +509,12 @@ static void serve_dirlist(struct mg_connection *c, struct mg_str uri,
     }
 
     mg_snprintf(full, sizeof(full), "%s/%s", path, name);
-    if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) slash = "/";
+    /* lstat() does not follow symlinks — prevents symlink escape from root. */
+    if (lstat(full, &st) != 0 || S_ISLNK(st.st_mode)) {
+      free(names[i]);
+      continue;
+    }
+    if (S_ISDIR(st.st_mode)) slash = "/";
 
     /* El nombre va URL-encodeado en el href y HTML-escapeado en el texto: un
      * archivo puede llamarse '<img onerror=...>.md' y sería XSS reflejado. */
@@ -497,7 +558,7 @@ static void route(struct mg_connection *c, int ev, void *ev_data)
     serve_markdown(c, hm, root);
   } else if (!uri_to_local_path(hm->uri, root, path, sizeof(path))) {
     serve_403(c);
-  } else if (stat(path, &st) != 0) {
+  } else if (lstat(path, &st) != 0) {
     /* Cortocircuito para devolver el 404 con el status correcto.
      *
      * Este chequeo sólo puede agregar 404s, nunca filtrar de más: si el
@@ -520,7 +581,7 @@ static void route(struct mg_connection *c, int ev, void *ev_data)
 
     mg_snprintf(index, sizeof(index), "%s/index.md", path);
 
-    if (stat(index, &ist) == 0 && S_ISREG(ist.st_mode)) {
+    if (lstat(index, &ist) == 0 && S_ISREG(ist.st_mode)) {
       render_markdown(c, index);
     } else {
       serve_dirlist(c, hm->uri, path);
