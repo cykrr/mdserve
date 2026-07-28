@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "frontmatter.h"
 #include "md.h"
 #include "membuf.h"
 #include "mongoose.h"
@@ -151,6 +152,7 @@ static void serve_400(struct mg_connection *c)
 static void render_markdown(struct mg_connection *c, const char *path)
 {
   struct stat st;
+  struct frontmatter fm;
   FILE *file;
   char *html;
 
@@ -171,6 +173,11 @@ static void render_markdown(struct mg_connection *c, const char *path)
     serve_404(c);
     return;
   }
+
+  /* El server ignora el flag "publish" — navegar local muestra todo — pero
+   * igual tiene que saltarse el bloque: md4c leería "---\ntitle: x\n---" como
+   * thematic break más setext heading, o sea basura arriba de cada nota. */
+  fm_scan(file, &fm);
 
   html = md_to_html(file);
   fclose(file);
