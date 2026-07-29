@@ -4,10 +4,12 @@
 #include <stdio.h>
 
 #define FM_TITLE_MAX 256
+#define FM_DATE_MAX   64
 
 struct frontmatter {
   int  publish;                 /* 1 si "publish: true" está presente */
   char title[FM_TITLE_MAX];     /* "" si no se declaró */
+  char date[FM_DATE_MAX];       /* "" si no se declaró */
 };
 
 /* Consume un bloque de frontmatter al inicio del archivo.

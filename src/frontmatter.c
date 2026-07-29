@@ -88,6 +88,8 @@ int fm_scan(FILE *f, struct frontmatter *out)
       out->publish = truthy(val);
     else if (strcmp(key, "title") == 0)
       snprintf(out->title, sizeof(out->title), "%s", val);
+    else if (strcmp(key, "date") == 0)
+      snprintf(out->date, sizeof(out->date), "%s", val);
   }
 
   /* EOF sin cierre: no era frontmatter. Se devuelve el archivo intacto. */

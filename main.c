@@ -93,6 +93,19 @@ static void cat_file(struct mg_connection *c, const char *filename)
   fclose(in);
 }
 
+/* Renderiza la fecha del frontmatter como texto y como valor machine-readable.
+ * Ambos contextos se escapan: date es contenido controlado por el autor de la
+ * nota, no HTML confiable. */
+static void write_date(struct mg_connection *c, const struct frontmatter *fm)
+{
+  if (!fm->date[0]) return;
+
+  mg_http_printf_chunk(c,
+      "<p class=\"date\"><time datetime=\"%M\">%M</time></p>\n",
+      mg_print_html_esc, (int) strlen(fm->date), fm->date,
+      mg_print_html_esc, (int) strlen(fm->date), fm->date);
+}
+
 /* Traduce el URI de una request a una ruta local bajo root.
  *
  * Mismo procedimiento que usa mongoose internamente: primero decodifica los
@@ -193,6 +206,7 @@ static void render_markdown(struct mg_connection *c, const char *path)
                "X-Content-Type-Options: nosniff\r\n"
                "Transfer-Encoding: chunked\r\n\r\n");
   cat_file(c, "head.html");
+  write_date(c, &fm);
   mg_http_printf_chunk(c, "%s", html);
   cat_file(c, "tail.html");
   mg_http_printf_chunk(c, "");  /* chunk vacío = fin de la respuesta */
@@ -228,6 +242,7 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
   struct remote_ctx *ctx = (struct remote_ctx *) nc->fn_data;
   struct mg_http_message *hm = (struct mg_http_message *) ev_data;
   char *html = NULL;
+  struct frontmatter fm;
 
   if (ev == MG_EV_CONNECT) {
     /* Connection established — reject private/reserved IPs. */
@@ -349,6 +364,7 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
       goto cleanup;
     }
 
+    fm_scan(mem, &fm);
     html = md_to_html(mem);
     fclose(mem);
 
@@ -368,6 +384,7 @@ static void remote_client_handler(struct mg_connection *nc, int ev, void *ev_dat
     cat_file(ctx->server_conn, "head.html");
     mg_http_printf_chunk(ctx->server_conn, "<p>Fuente: <a href=\"%s\">%s</a></p>\n",
                          ctx->url, ctx->url);
+    write_date(ctx->server_conn, &fm);
     mg_http_printf_chunk(ctx->server_conn, "%s", html);
     cat_file(ctx->server_conn, "tail.html");
     mg_http_printf_chunk(ctx->server_conn, "");

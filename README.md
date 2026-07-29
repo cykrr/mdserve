@@ -100,12 +100,13 @@ A `.md` file is only emitted if its YAML frontmatter says so:
 ---
 publish: true
 title: Optional title for directory listings
+date: 2026-07-28
 ---
 
 # Your note
 ```
 
-Files without the flag are skipped. `mdserve` ignores the flag entirely — browsing locally shows everything — but both binaries strip the frontmatter block before rendering, so it never leaks into the output.
+Files without the flag are skipped. `date` is optional; when present, it is displayed above the rendered note as a semantic `<time>` element. `mdserve` ignores the publish flag entirely — browsing locally shows everything — but both binaries strip the frontmatter block before rendering, so it never leaks into the output.
 
 Non-Markdown files (images, attachments) are **copied unconditionally**, since a published note that links to an image needs that image to exist. Don't put anything in the tree you wouldn't publish as a raw file.
 

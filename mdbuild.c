@@ -131,6 +131,19 @@ static void html_esc(struct membuffer *buf, const char *s)
   }
 }
 
+/* Date metadata is emitted outside the Markdown body so it cannot be confused
+ * with authored content. Escape it for both the visible text and datetime. */
+static void put_date(struct membuffer *buf, const struct frontmatter *fm)
+{
+  if (!fm->date[0]) return;
+
+  put(buf, "<p class=\"date\"><time datetime=\"");
+  html_esc(buf, fm->date);
+  put(buf, "\">");
+  html_esc(buf, fm->date);
+  put(buf, "</time></p>\n");
+}
+
 /* Percent-encode para el href de un listado. Deja pasar los caracteres que son
  * seguros dentro de un path. */
 static void url_enc(struct membuffer *buf, const char *s)
@@ -524,7 +537,14 @@ static int build_dir(const char *src_dir, const char *out_dir,
 
         {
           struct membuffer fixed = rewrite_links(html, urldir);
-          write_page(out, fixed.data);
+          struct membuffer page = {0};
+
+          membuf_init(&page, fixed.size + 128);
+          put_date(&page, &fm);
+          put(&page, fixed.data);
+          membuf_append(&page, "", 1);
+          write_page(out, page.data);
+          membuf_fini(&page);
           membuf_fini(&fixed);
         }
         free(html);
